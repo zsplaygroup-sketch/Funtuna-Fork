@@ -1,4 +1,4 @@
-name: SD Ceara Games - FunTuna V2 Splash e Progresso SDK Fix 4
+name: SD Ceara Games - FunTuna V2 Splash e Progresso SDK Fix 5
 
 on:
   workflow_dispatch:
@@ -106,7 +106,33 @@ jobs:
           make=make.replace(duplicate,'$(EE_CC) $(EE_LDFLAGS)',1)
           assert '-mno-crt0' not in make
           assert make.count('$(EE_CC) $(EE_LDFLAGS)')==1
+
+          # Older FreeMcBoot crt0.s expects _ps2sdk_* symbols removed from
+          # current PS2SDK. Current startup uses the libcglue equivalent
+          # functions, with the same argc/argv argument registers for parse.
+          # Include libcglue explicitly because this project defines EE_LIBS.
+          old_libs='EE_LIBS += -lc -lkernel'
+          new_libs='EE_LIBS += -lc -lcglue -lkernel'
+          if make.count(old_libs)!=1:
+              raise SystemExit('Unexpected old linker libs; refusing libcglue update')
+          make=make.replace(old_libs,new_libs,1)
           fm.write_text(make,encoding='latin-1')
+
+          crt=Path('FreeMcBoot/crt0.s')
+          c0=crt.read_text(encoding='latin-1')
+          symbol_replacements=[
+              ('jal\t_ps2sdk_args_parse', 'jal\t_libcglue_args_parse'),
+              ('jal\t_ps2sdk_libc_init', 'jal\t_libcglue_init'),
+              ('jal     _ps2sdk_libc_deinit', 'jal     _libcglue_deinit'),
+          ]
+          for src,dst in symbol_replacements:
+              if c0.count(src)!=1:
+                  raise SystemExit(f'Old FreeMcBoot crt0 anchor missing/repeated: {src!r}')
+              c0=c0.replace(src,dst,1)
+          crt.write_text(c0,encoding='latin-1')
+          assert '_ps2sdk_args_parse' not in c0
+          assert '_ps2sdk_libc_init' not in c0
+          assert '_ps2sdk_libc_deinit' not in c0
 
           launcher=Path('FreeMcBoot/launcher2.c')
           c=launcher.read_text(encoding='latin-1')
