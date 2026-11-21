@@ -1,8 +1,11 @@
 name: SD Ceara Games - FunTuna Installer com OPL XMB v1.0
+
 on:
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   compilar-installer:
     runs-on: ubuntu-latest
@@ -11,28 +14,78 @@ jobs:
     steps:
       - name: Baixar fork do FunTuna
         uses: actions/checkout@v4
+
       - name: Instalar dependencias
+        shell: sh
         run: apk add --no-cache python3 build-base git zip
+
+      - name: Preparar ferramenta bin2s ausente no PS2DEV
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p /tmp/sdceara-tools
+          cat > /tmp/sdceara-tools/bin2s <<'PYBIN2S'
+          #!/usr/bin/env python3
+          """bin2s compativel com o instalador FunTuna (PS2 MIPS ELF)."""
+          from pathlib import Path
+          import re
+          import sys
+
+          if len(sys.argv) != 4:
+              sys.exit('Uso: bin2s arquivo_entrada arquivo_saida.s simbolo')
+          input_file = Path(sys.argv[1])
+          output_file = Path(sys.argv[2])
+          symbol = sys.argv[3]
+          if not input_file.is_file():
+              sys.exit(f'Arquivo ausente: {input_file}')
+          if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', symbol):
+              sys.exit(f'Simbolo invalido: {symbol}')
+          # The assembler runs from the installer/ working directory, the
+          # same working directory where make invoked this generator.
+          escaped = input_file.as_posix().replace('\\', '\\\\').replace('"', '\\"')
+          assembly = (
+              '.section .rodata\n'
+              '.balign 16\n'
+              f'.global {symbol}\n'
+              f'{symbol}:\n'
+              f'.incbin "{escaped}"\n'
+              '.balign 4\n'
+              f'.global size_{symbol}\n'
+              f'size_{symbol}:\n'
+              f'.word {input_file.stat().st_size}\n'
+          )
+          output_file.write_text(assembly, encoding='utf-8')
+          PYBIN2S
+          chmod +x /tmp/sdceara-tools/bin2s
+          echo '/tmp/sdceara-tools' >> "$GITHUB_PATH"
+
       - name: Personalizar instalador e integrar OPL XMB 1.0
+        shell: sh
         run: python3 sdceara/aplicar_personalizacao.py .
+
       - name: Compilar instalador PS2
         shell: sh
         run: |
           set -eu
+          export PATH="/tmp/sdceara-tools:$PATH"
           cd installer
           make clean
           make
           test -s FunTuna-Fork_Installer.ELF
           cp FunTuna-Fork_Installer.ELF ../SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF
+
       - name: Verificar binario
+        shell: sh
         run: |
+          set -eu
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF')
-          assert p.read_bytes().startswith(b'\x7fELF'), 'Binary is not ELF'
-          print('READY:',p.name,p.stat().st_size,'bytes')
+          p = Path('SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF')
+          assert p.read_bytes().startswith(b'\x7fELF'), 'O binario gerado nao e ELF'
+          print('READY:', p.name, p.stat().st_size, 'bytes')
           PY
           sha256sum SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF > SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1.sha256
+
       - name: Publicar ELF de teste
         uses: actions/upload-artifact@v4
         with:
