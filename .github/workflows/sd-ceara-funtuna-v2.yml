@@ -1,4 +1,4 @@
-name: SD Ceara Games - FunTuna V2 Splash e Progresso SDK Fix 3
+name: SD Ceara Games - FunTuna V2 Splash e Progresso SDK Fix 4
 
 on:
   workflow_dispatch:
@@ -96,7 +96,16 @@ jobs:
           if make.count(obsolete)!=2:
               raise SystemExit('Unexpected FreeMcBoot legacy link rules; refusing patch')
           make=make.replace(obsolete,'$(EE_CC) -nostartfiles ')
+          # The parent FreeMcBoot/Makefile already sets EE_LDFLAGS to
+          # '-nostartfiles -Tlinkfile ...'. The legacy rule independently
+          # inserts -Tlinkfile, causing modern ld to reject it twice.
+          # Let EE_LDFLAGS supply exactly one startup flag and link script.
+          duplicate='$(EE_CC) -nostartfiles -Tlinkfile $(EE_LDFLAGS)'
+          if make.count(duplicate)!=1:
+              raise SystemExit('Unexpected FreeMcBoot link rule; refusing duplicate linker script patch')
+          make=make.replace(duplicate,'$(EE_CC) $(EE_LDFLAGS)',1)
           assert '-mno-crt0' not in make
+          assert make.count('$(EE_CC) $(EE_LDFLAGS)')==1
           fm.write_text(make,encoding='latin-1')
 
           launcher=Path('FreeMcBoot/launcher2.c')
