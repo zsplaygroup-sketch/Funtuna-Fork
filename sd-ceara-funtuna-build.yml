@@ -1,0 +1,45 @@
+name: SD Ceara Games - FunTuna Installer com OPL XMB v1.0
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compilar-installer:
+    runs-on: ubuntu-latest
+    container: ps2dev/ps2dev:v1.2.0
+    timeout-minutes: 30
+    steps:
+      - name: Baixar fork do FunTuna
+        uses: actions/checkout@v4
+      - name: Instalar dependencias
+        run: apk add --no-cache python3 build-base git zip
+      - name: Personalizar instalador e integrar OPL XMB 1.0
+        run: python3 sdceara/aplicar_personalizacao.py .
+      - name: Compilar instalador PS2
+        shell: sh
+        run: |
+          set -eu
+          cd installer
+          make clean
+          make
+          test -s FunTuna-Fork_Installer.ELF
+          cp FunTuna-Fork_Installer.ELF ../SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF
+      - name: Verificar binario
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF')
+          assert p.read_bytes().startswith(b'\x7fELF'), 'Binary is not ELF'
+          print('READY:',p.name,p.stat().st_size,'bytes')
+          PY
+          sha256sum SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF > SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1.sha256
+      - name: Publicar ELF de teste
+        uses: actions/upload-artifact@v4
+        with:
+          name: SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE
+          path: |
+            SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1-TESTE.ELF
+            SD-CEARA-GAMES-FUNTUNA-INSTALLER-V1.sha256
+            sdceara-build-report.json
+          if-no-files-found: error
+          retention-days: 30
