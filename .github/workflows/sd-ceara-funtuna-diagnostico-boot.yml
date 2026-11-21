@@ -1,0 +1,243 @@
+name: SD Ceara Games - Diagnostico FreeMcBoot Original vs Logo
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sd-ceara-funtuna-diagnostico-boot.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  compilar-installer:
+    runs-on: ubuntu-latest
+    container: ghcr.io/ps2homebrew/ps2homebrew:main
+    timeout-minutes: 45
+    steps:
+      - name: Baixar fork do FunTuna
+        uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        shell: sh
+        run: apk add --no-cache python3 build-base git zip
+
+      - name: Preparar ferramenta bin2s ausente no PS2DEV
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p /tmp/sdceara-tools
+          cat > /tmp/sdceara-tools/bin2s <<'PYBIN2S'
+          #!/usr/bin/env python3
+          """bin2s compativel com o instalador FunTuna (PS2 MIPS ELF)."""
+          from pathlib import Path
+          import re
+          import sys
+
+          if len(sys.argv) != 4:
+              sys.exit('Uso: bin2s arquivo_entrada arquivo_saida.s simbolo')
+          input_file = Path(sys.argv[1])
+          output_file = Path(sys.argv[2])
+          symbol = sys.argv[3]
+          if not input_file.is_file():
+              sys.exit(f'Arquivo ausente: {input_file}')
+          if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', symbol):
+              sys.exit(f'Simbolo invalido: {symbol}')
+          escaped = input_file.as_posix().replace('\\', '\\\\').replace('"', '\\"')
+          assembly = (
+              '.section .rodata\n'
+              '.balign 16\n'
+              f'.global {symbol}\n'
+              f'{symbol}:\n'
+              f'.incbin "{escaped}"\n'
+              '.balign 4\n'
+              f'.global size_{symbol}\n'
+              f'size_{symbol}:\n'
+              f'.word {input_file.stat().st_size}\n'
+          )
+          output_file.write_text(assembly, encoding='utf-8')
+          PYBIN2S
+          chmod +x /tmp/sdceara-tools/bin2s
+          echo '/tmp/sdceara-tools' >> "$GITHUB_PATH"
+
+      - name: Personalizar instalador e integrar OPL XMB 1.0
+        shell: sh
+        run: python3 sdceara/aplicar_personalizacao.py .
+
+      - name: Guardar splash original para teste comparativo
+        shell: sh
+        run: |
+          set -eu
+          cp FreeMcBoot/splash.h /tmp/sdceara-splash-original.h
+          test -s /tmp/sdceara-splash-original.h
+          grep -q 'splash_w = 240' /tmp/sdceara-splash-original.h
+          grep -q 'splash_h = 84' /tmp/sdceara-splash-original.h
+
+      - name: Aplicar V2 - splash FreeMcBoot + barra de progresso
+        shell: sh
+        run: |
+          set -eu
+          python3 sdceara/aplicar_v2.py .
+          test -s FreeMcBoot/splash.h
+          test -s installer/SDCEARA/SD_WORKING.rgba
+
+      - name: Compatibilizar FreeMcBoot antigo com PS2SDK atual
+        shell: sh
+        run: |
+          set -eu
+          python3 - <<'PYCOMPAT'
+          from pathlib import Path
+
+          # Change only legacy FreeMcBoot sources in the ephemeral build runner.
+          fm=Path('FreeMcBoot/Makefile.eeglobal')
+          make=fm.read_text(encoding='latin-1')
+          old='EE_CFLAGS := -G0 -D_EE -O2  -Wall $(EE_CFLAGS)'
+          new='EE_CFLAGS := -G0 -D_EE -DNEWLIB_PORT_AWARE -O2  -Wall $(EE_CFLAGS)'
+          if make.count(old)!=1:
+              raise SystemExit('Makefile.eeglobal unexpected; refusing compatibility patch')
+          make=make.replace(old,new)
+
+          # FreeMcBoot legado usa -mno-crt0, removido no GCC do PS2SDK atual.
+          # O projeto fornece seu proprio crt0.o: -nostartfiles evita o CRT
+          # automatico sem remover o crt0.o explicitamente listado no link.
+          obsolete='$(EE_CC) -mno-crt0 '
+          if make.count(obsolete)!=2:
+              raise SystemExit('Unexpected FreeMcBoot legacy link rules; refusing patch')
+          make=make.replace(obsolete,'$(EE_CC) -nostartfiles ')
+          # The parent FreeMcBoot/Makefile already sets EE_LDFLAGS to
+          # '-nostartfiles -Tlinkfile ...'. The legacy rule independently
+          # inserts -Tlinkfile, causing modern ld to reject it twice.
+          # Let EE_LDFLAGS supply exactly one startup flag and link script.
+          duplicate='$(EE_CC) -nostartfiles -Tlinkfile $(EE_LDFLAGS)'
+          if make.count(duplicate)!=1:
+              raise SystemExit('Unexpected FreeMcBoot link rule; refusing duplicate linker script patch')
+          make=make.replace(duplicate,'$(EE_CC) $(EE_LDFLAGS)',1)
+          assert '-mno-crt0' not in make
+          assert make.count('$(EE_CC) $(EE_LDFLAGS)')==1
+
+          # Older FreeMcBoot crt0.s expects _ps2sdk_* symbols removed from
+          # current PS2SDK. Current startup uses the libcglue equivalent
+          # functions, with the same argc/argv argument registers for parse.
+          # Include libcglue explicitly because this project defines EE_LIBS.
+          old_libs='EE_LIBS += -lc -lkernel'
+          new_libs='EE_LIBS += -lc -lcglue -lkernel'
+          if make.count(old_libs)!=1:
+              raise SystemExit('Unexpected old linker libs; refusing libcglue update')
+          make=make.replace(old_libs,new_libs,1)
+          fm.write_text(make,encoding='latin-1')
+
+          crt=Path('FreeMcBoot/crt0.s')
+          c0=crt.read_text(encoding='latin-1')
+          symbol_replacements=[
+              ('jal\t_ps2sdk_args_parse', 'jal\t_libcglue_args_parse'),
+              ('jal\t_ps2sdk_libc_init', 'jal\t_libcglue_init'),
+              ('jal     _ps2sdk_libc_deinit', 'jal     _libcglue_deinit'),
+          ]
+          for src,dst in symbol_replacements:
+              if c0.count(src)!=1:
+                  raise SystemExit(f'Old FreeMcBoot crt0 anchor missing/repeated: {src!r}')
+              c0=c0.replace(src,dst,1)
+          crt.write_text(c0,encoding='latin-1')
+          assert '_ps2sdk_args_parse' not in c0
+          assert '_ps2sdk_libc_init' not in c0
+          assert '_ps2sdk_libc_deinit' not in c0
+
+          launcher=Path('FreeMcBoot/launcher2.c')
+          c=launcher.read_text(encoding='latin-1')
+          fixes=[
+              ('#include <stdio.h>', '#include <stdio.h>\n#include <stdlib.h>',
+               'stdlib declarations'),
+              ('\t\t\tpadReset();',
+               '\t\t\t/* PS2SDK moderno: padEnd() ja libera a biblioteca. */',
+               'obsolete padReset'),
+              ('CdvdDiscType_t cdmode;', 'int cdmode;',
+               'legacy DVD media enum type')
+          ]
+          for before,after,desc in fixes:
+              if c.count(before)!=1:
+                  raise SystemExit(f'{desc}: expected exactly one old source anchor, found {c.count(before)}')
+              c=c.replace(before,after,1)
+          launcher.write_text(c,encoding='latin-1')
+
+          # GCC atual rejeita aligned(16) em cada elemento de vmode_t: o
+          # tamanho do elemento antigo e 12 bytes. Alinhe o vetor, nao o tipo.
+          # Isso preserva o layout dos campos no codigo legado.
+          gs=Path('FreeMcBoot/gs.c')
+          g=gs.read_text(encoding='latin-1')
+          old_type='} vmode_t __attribute__((aligned(16)));'
+          old_array='vmode_t vmodes[] = {'
+          if g.count(old_type)!=1 or g.count(old_array)!=1:
+              raise SystemExit('Unexpected FreeMcBoot gs.c; refusing ABI patch')
+          g=g.replace(old_type, '} vmode_t;', 1)
+          g=g.replace(old_array, 'vmode_t vmodes[] __attribute__((aligned(16))) = {', 1)
+          gs.write_text(g,encoding='latin-1')
+
+          assert 'DNEWLIB_PORT_AWARE' in fm.read_text(encoding='latin-1')
+          assert 'padReset();' not in c
+          print('Legacy FreeMcBoot compatibility source patch: OK')
+          PYCOMPAT
+
+      - name: Gerar BOOT de controle com splash original 240x84
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p SDCEARA-DIAGNOSTICO
+          cp installer/INSTALLER_CONTENTS/BOOT/BOOT.ELF SDCEARA-DIAGNOSTICO/BOOT-V1-COMPROVADO.ELF
+          test "$(wc -c < SDCEARA-DIAGNOSTICO/BOOT-V1-COMPROVADO.ELF)" -eq 64228
+          # O projeto V2 ja trocou splash.h pelo desenho novo; reserve a versao V2.
+          cp FreeMcBoot/splash.h /tmp/sdceara-splash-personalizado.h
+          grep -q 'splash_w = 480' /tmp/sdceara-splash-personalizado.h
+          grep -q 'splash_h = 168' /tmp/sdceara-splash-personalizado.h
+          # Controle: mesmo PS2SDK / mesmas correcoes Fix 5, mas LOGO ORIGINAL.
+          cp /tmp/sdceara-splash-original.h FreeMcBoot/splash.h
+          export PATH="/tmp/sdceara-tools:$PATH"
+          make -C FreeMcBoot EE_PREFIX=mips64r5900el-ps2-elf- all
+          test -s FreeMcBoot/BOOT.ELF
+          test -s FreeMcBoot/BOOT-UNC.ELF
+          cp FreeMcBoot/BOOT.ELF SDCEARA-DIAGNOSTICO/BOOT-RECOMPILADO-ORIGINAL.ELF
+          cp FreeMcBoot/BOOT-UNC.ELF SDCEARA-DIAGNOSTICO/BOOT-RECOMPILADO-ORIGINAL-SEM-PACKER.ELF
+
+      - name: Gerar BOOT comparativo com splash SD Ceara 480x168
+        shell: sh
+        run: |
+          set -eu
+          cp /tmp/sdceara-splash-personalizado.h FreeMcBoot/splash.h
+          # A dependencia splash.h nao esta declarada no Makefile antigo:
+          # forcar recompilacao do launcher2.o e novo empacotamento.
+          rm -f FreeMcBoot/launcher2.o FreeMcBoot/BOOT-UNC.ELF FreeMcBoot/BOOT-STRIPPED.ELF FreeMcBoot/BOOT.ELF
+          export PATH="/tmp/sdceara-tools:$PATH"
+          make -C FreeMcBoot EE_PREFIX=mips64r5900el-ps2-elf- all
+          test -s FreeMcBoot/BOOT.ELF
+          test -s FreeMcBoot/BOOT-UNC.ELF
+          cp FreeMcBoot/BOOT.ELF SDCEARA-DIAGNOSTICO/BOOT-RECOMPILADO-SD-CEARA.ELF
+          cp FreeMcBoot/BOOT-UNC.ELF SDCEARA-DIAGNOSTICO/BOOT-RECOMPILADO-SD-CEARA-SEM-PACKER.ELF
+
+      - name: Verificar binarios e emitir hashes
+        shell: sh
+        run: |
+          set -eu
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          import hashlib, json
+          d=Path('SDCEARA-DIAGNOSTICO')
+          files=list(sorted(d.glob('*.ELF')))
+          assert len(files)==5, 'Esperados os 5 executaveis de diagnostico'
+          summary={}
+          for p in files:
+              b=p.read_bytes()
+              assert b[:4]==b'\x7fELF',f'Nao ELF: {p}'
+              summary[p.name]={'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}
+              print(p.name, len(b), summary[p.name]['sha256'])
+          assert summary['BOOT-RECOMPILADO-ORIGINAL.ELF']['sha256'] != summary['BOOT-RECOMPILADO-SD-CEARA.ELF']['sha256'], 'Os testes devem produzir boots distintos'
+          (d/'MANIFEST.json').write_text(json.dumps(summary, indent=2, ensure_ascii=False)+'\n',encoding='utf8')
+          PYTEST
+          (cd SDCEARA-DIAGNOSTICO && sha256sum *.ELF > SHA256SUMS.txt)
+
+      - name: Publicar somente arquivos de diagnostico - sem instalar
+        uses: actions/upload-artifact@v4
+        with:
+          name: SD-CEARA-FUNTUNA-BOOTS-COMPARATIVOS
+          path: SDCEARA-DIAGNOSTICO/
+          if-no-files-found: error
+          retention-days: 30
