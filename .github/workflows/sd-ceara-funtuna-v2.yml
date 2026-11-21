@@ -1,4 +1,4 @@
-name: SD Ceara Games - FunTuna V2 Splash e Progresso
+name: SD Ceara Games - FunTuna V2 Splash e Progresso SDK Fix
 
 on:
   workflow_dispatch:
@@ -70,6 +70,44 @@ jobs:
           python3 sdceara/aplicar_v2.py .
           test -s FreeMcBoot/splash.h
           test -s installer/SDCEARA/SD_WORKING.rgba
+
+      - name: Compatibilizar FreeMcBoot antigo com PS2SDK atual
+        shell: sh
+        run: |
+          set -eu
+          python3 - <<'PYCOMPAT'
+          from pathlib import Path
+
+          # Only legacy FreeMcBoot sources are touched, and only in the
+          # temporary GitHub Actions runner after the validated V2 patch.
+          fm=Path('FreeMcBoot/Makefile.eeglobal')
+          make= fm.read_text(encoding='latin-1')
+          old='EE_CFLAGS := -G0 -D_EE -O2  -Wall $(EE_CFLAGS)'
+          new='EE_CFLAGS := -G0 -D_EE -DNEWLIB_PORT_AWARE -O2  -Wall $(EE_CFLAGS)'
+          if make.count(old)!=1:
+              raise SystemExit('Makefile.eeglobal unexpected; refusing compatibility patch')
+          fm.write_text(make.replace(old,new),encoding='latin-1')
+
+          launcher=Path('FreeMcBoot/launcher2.c')
+          c=launcher.read_text(encoding='latin-1')
+          fixes=[
+              ('#include <stdio.h>', '#include <stdio.h>\n#include <stdlib.h>',
+               'stdlib declarations'),
+              ('\t\t\tpadReset();',
+               '\t\t\t/* PS2SDK moderno: padEnd() ja libera a biblioteca. */',
+               'obsolete padReset'),
+              ('CdvdDiscType_t cdmode;', 'int cdmode;',
+               'legacy DVD media enum type')
+          ]
+          for before,after,desc in fixes:
+              if c.count(before)!=1:
+                  raise SystemExit(f'{desc}: expected exactly one old source anchor, found {c.count(before)}')
+              c=c.replace(before,after,1)
+          launcher.write_text(c,encoding='latin-1')
+          assert 'DNEWLIB_PORT_AWARE' in fm.read_text(encoding='latin-1')
+          assert 'padReset();' not in c
+          print('Legacy FreeMcBoot compatibility source patch: OK')
+          PYCOMPAT
 
       - name: Recompilar FreeMcBoot com logo SD Ceara Games
         shell: sh
