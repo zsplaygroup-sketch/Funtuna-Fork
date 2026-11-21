@@ -1,4 +1,4 @@
-name: SD Ceara Games - FunTuna V2 Splash e Progresso SDK Fix 2
+name: SD Ceara Games - FunTuna V2 Splash e Progresso SDK Fix 3
 
 on:
   workflow_dispatch:
@@ -87,7 +87,17 @@ jobs:
           new='EE_CFLAGS := -G0 -D_EE -DNEWLIB_PORT_AWARE -O2  -Wall $(EE_CFLAGS)'
           if make.count(old)!=1:
               raise SystemExit('Makefile.eeglobal unexpected; refusing compatibility patch')
-          fm.write_text(make.replace(old,new),encoding='latin-1')
+          make=make.replace(old,new)
+
+          # FreeMcBoot legado usa -mno-crt0, removido no GCC do PS2SDK atual.
+          # O projeto fornece seu proprio crt0.o: -nostartfiles evita o CRT
+          # automatico sem remover o crt0.o explicitamente listado no link.
+          obsolete='$(EE_CC) -mno-crt0 '
+          if make.count(obsolete)!=2:
+              raise SystemExit('Unexpected FreeMcBoot legacy link rules; refusing patch')
+          make=make.replace(obsolete,'$(EE_CC) -nostartfiles ')
+          assert '-mno-crt0' not in make
+          fm.write_text(make,encoding='latin-1')
 
           launcher=Path('FreeMcBoot/launcher2.c')
           c=launcher.read_text(encoding='latin-1')
