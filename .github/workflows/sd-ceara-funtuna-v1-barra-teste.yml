@@ -1,0 +1,72 @@
+name: SD Ceara Games - FunTuna V1 com barra TESTE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/ps2homebrew/ps2homebrew:main
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Dependencias
+        shell: sh
+        run: apk add --no-cache python3 build-base git zip
+      - name: Preparar bin2s
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p /tmp/sdceara-tools
+          cat > /tmp/sdceara-tools/bin2s <<'PYBIN2S'
+          #!/usr/bin/env python3
+          from pathlib import Path
+          import re,sys
+          if len(sys.argv)!=4: sys.exit('Uso: bin2s entrada saida simbolo')
+          src,dst,symbol=sys.argv[1:]
+          if not Path(src).is_file(): sys.exit('Arquivo ausente: '+src)
+          if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',symbol): sys.exit('Simbolo invalido')
+          escaped=Path(src).as_posix().replace('\\','\\\\').replace('"','\\"')
+          Path(dst).write_text('.section .rodata\n.balign 16\n.global '+symbol+'\n'+symbol+':\n.incbin "'+escaped+'"\n.balign 4\n.global size_'+symbol+'\nsize_'+symbol+':\n.word '+str(Path(src).stat().st_size)+'\n')
+          PYBIN2S
+          chmod +x /tmp/sdceara-tools/bin2s
+      - name: Aplicar personalizacao V1
+        shell: sh
+        run: python3 sdceara/aplicar_personalizacao.py .
+      - name: Aplicar somente barra
+        shell: sh
+        run: python3 sdceara/aplicar_barra_somente.py .
+      - name: Compilar instalador sem alterar FreeMcBoot
+        shell: sh
+        run: |
+          set -eu
+          export PATH="/tmp/sdceara-tools:$PATH"
+          cd installer
+          make clean
+          make
+          test -s FunTuna-Fork_Installer.ELF
+          cp FunTuna-Fork_Installer.ELF ../SD-CEARA-GAMES-FUNTUNA-V1-BARRA-TESTE.ELF
+      - name: Validar ELF e checksum
+        shell: sh
+        run: |
+          set -eu
+          python3 - <<'PYELF'
+          from pathlib import Path
+          p=Path('SD-CEARA-GAMES-FUNTUNA-V1-BARRA-TESTE.ELF')
+          assert p.read_bytes()[:4]==b'\x7fELF'
+          print('ELF:',p.stat().st_size,'bytes')
+          PYELF
+          sha256sum SD-CEARA-GAMES-FUNTUNA-V1-BARRA-TESTE.ELF > SD-CEARA-GAMES-FUNTUNA-V1-BARRA-TESTE.sha256
+      - name: Publicar artefato experimental
+        uses: actions/upload-artifact@v4
+        with:
+          name: SD-CEARA-GAMES-FUNTUNA-V1-BARRA-TESTE
+          path: |
+            SD-CEARA-GAMES-FUNTUNA-V1-BARRA-TESTE.ELF
+            SD-CEARA-GAMES-FUNTUNA-V1-BARRA-TESTE.sha256
+            sdceara-build-report.json
+          if-no-files-found: error
