@@ -43,7 +43,7 @@ jobs:
           set -eu
           apk add --no-cache curl
           OPL_DEST="installer/INSTALLER_CONTENTS/APPS/OPNPS2LD.ELF"
-          OPL_URL="https://github.com/zsplaygroup-sketch/OPL-Evolution/releases/download/v1.8-mx4sio-final/SD-CEARA-GAMES-EVOLUTION-XMB-v1.8-MX4SIO-FINAL.ELF"
+          OPL_URL="https://raw.githubusercontent.com/zsplaygroup-sketch/Funtuna-Fork/sd-ceara-funtuna-v1-opl-mx4sio-final/sdceara/SD-CEARA-GAMES-EVOLUTION-XMB-v1.8-MX4SIO-FINAL.ELF"
           curl --fail --location --retry 3 --silent --show-error "$OPL_URL" -o /tmp/SD-CEARA-OPL-v1.8-stable.ELF
           python3 - <<'PYELF'
           from pathlib import Path
