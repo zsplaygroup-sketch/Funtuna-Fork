@@ -1,4 +1,4 @@
-name: SD Ceara Games - FunTuna V1 BARRA + OPL v1.8 FINAL TESTE
+name: SD Ceara Games - FunTuna V1 com OPL v1.8 MX4SIO FINAL
 
 on:
   workflow_dispatch:
@@ -43,7 +43,7 @@ jobs:
           set -eu
           apk add --no-cache curl
           OPL_DEST="installer/INSTALLER_CONTENTS/APPS/OPNPS2LD.ELF"
-          OPL_URL="https://github.com/zsplaygroup-sketch/OPL-Evolution/releases/download/v1.8-stable/SD-CEARA-GAMES-EVOLUTION-XMB-v1.8-MUSIC-PLAYER-TESTE.ELF"
+          OPL_URL="https://github.com/zsplaygroup-sketch/OPL-Evolution/releases/download/v1.8-mx4sio-final/SD-CEARA-GAMES-EVOLUTION-XMB-v1.8-MX4SIO-FINAL.ELF"
           curl --fail --location --retry 3 --silent --show-error "$OPL_URL" -o /tmp/SD-CEARA-OPL-v1.8-stable.ELF
           python3 - <<'PYELF'
           from pathlib import Path
@@ -51,6 +51,10 @@ jobs:
           new=Path('/tmp/SD-CEARA-OPL-v1.8-stable.ELF')
           old=Path('installer/INSTALLER_CONTENTS/APPS/OPNPS2LD.ELF')
           data=new.read_bytes()
+          expected='3319d825d79d68623ddde054f51b2ac616e57c5dcb2d44be753296109e8867c8'
+          actual=hashlib.sha256(data).hexdigest()
+          if actual!=expected:
+              raise SystemExit('ERRO: OPL nao corresponde ao ELF final aprovado. SHA256: '+actual)
           if len(data)<100000 or data[:4]!=b'\x7fELF':
               raise SystemExit('ERRO: ELF v1.8 ausente ou invalido; compilacao cancelada')
           if not old.is_file():
@@ -58,7 +62,7 @@ jobs:
           if data==old.read_bytes():
               raise SystemExit('ERRO: OPL nao foi substituido; compilacao cancelada')
           old.write_bytes(data)
-          print('OPL v1.8 integrado; bytes:',len(data))
+          print('OPL v1.8 MX4SIO FINAL integrado; bytes:',len(data))
           print('SHA256 OPL:',hashlib.sha256(data).hexdigest())
           PYELF
       - name: Aplicar somente barra
@@ -73,24 +77,24 @@ jobs:
           make clean
           make
           test -s FunTuna-Fork_Installer.ELF
-          cp FunTuna-Fork_Installer.ELF ../SD-CEARA-GAMES-FUNTUNA-V1-BARRA-OPL-V18-TESTE.ELF
+          cp FunTuna-Fork_Installer.ELF ../SD-CEARA-GAMES-FUNTUNA-V1-OPL-V18-MX4SIO-FINAL-TESTE.ELF
       - name: Validar ELF e checksum
         shell: sh
         run: |
           set -eu
           python3 - <<'PYELF'
           from pathlib import Path
-          p=Path('SD-CEARA-GAMES-FUNTUNA-V1-BARRA-OPL-V18-TESTE.ELF')
+          p=Path('SD-CEARA-GAMES-FUNTUNA-V1-OPL-V18-MX4SIO-FINAL-TESTE.ELF')
           assert p.read_bytes()[:4]==b'\x7fELF'
           print('ELF:',p.stat().st_size,'bytes')
           PYELF
-          sha256sum SD-CEARA-GAMES-FUNTUNA-V1-BARRA-OPL-V18-TESTE.ELF > SD-CEARA-GAMES-FUNTUNA-V1-BARRA-OPL-V18-TESTE.sha256
+          sha256sum SD-CEARA-GAMES-FUNTUNA-V1-OPL-V18-MX4SIO-FINAL-TESTE.ELF > SD-CEARA-GAMES-FUNTUNA-V1-OPL-V18-MX4SIO-FINAL-TESTE.sha256
       - name: Publicar artefato experimental
         uses: actions/upload-artifact@v4
         with:
-          name: SD-CEARA-GAMES-FUNTUNA-V1-BARRA-OPL-V18-TESTE
+          name: SD-CEARA-GAMES-FUNTUNA-V1-OPL-V18-MX4SIO-FINAL-TESTE
           path: |
-            SD-CEARA-GAMES-FUNTUNA-V1-BARRA-OPL-V18-TESTE.ELF
-            SD-CEARA-GAMES-FUNTUNA-V1-BARRA-OPL-V18-TESTE.sha256
+            SD-CEARA-GAMES-FUNTUNA-V1-OPL-V18-MX4SIO-FINAL-TESTE.ELF
+            SD-CEARA-GAMES-FUNTUNA-V1-OPL-V18-MX4SIO-FINAL-TESTE.sha256
             sdceara-build-report.json
           if-no-files-found: error
